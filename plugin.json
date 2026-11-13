@@ -1,0 +1,22 @@
+{
+  "name": "agentic-framework",
+  "displayName": "Agentic Development Framework",
+  "version": "1.0.0",
+  "description": "Multi-agent software engineering framework bundling 6 specialized subagents (architect, implementer, code-reviewer, security-auditor, debugger, verifier), 5 workflow skills (/adf-build, /adf-parallel, /adf-review, /adf-debug, /adf-ship), global routing rules, and a PreToolUse command safety gate.",
+  "author": {
+    "name": "awaiden",
+    "url": "https://github.com/awaiden"
+  },
+  "homepage": "https://github.com/awaiden/agentic-framework",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/awaiden/agentic-framework.git"
+  },
+  "license": "MIT",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "/adf-build Plan, implement, review, and verify a new feature end-to-end",
+    "/adf-review Run a parallel multi-angle audit (quality, security, architecture) on my changes",
+    "/adf-debug Run parallel root-cause hypothesis testing on a failing test or bug"
+  ]
+}
