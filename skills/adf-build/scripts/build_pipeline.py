@@ -2,9 +2,9 @@
 # Orchestrates: architect -> staged implementer -> parallel (code-reviewer + security-auditor) -> verifier
 
 wf_args = globals().get("args") or {}
-goal = wf_args.get("goal", "").strip()
-constraints = wf_args.get("constraints", "Follow existing project conventions and Ponytail minimal-diff principles.").strip()
-max_fix_rounds = int(wf_args.get("max_fix_rounds", 2))
+goal = str(wf_args.get("goal") or "").strip()
+constraints = str(wf_args.get("constraints") or "Follow existing project conventions and Ponytail minimal-diff principles.").strip()
+max_fix_rounds = max(0, int(wf_args.get("max_fix_rounds", 2)))
 
 if not goal:
     raise ValueError("Missing required 'goal' in Args for build_pipeline.py")
@@ -86,14 +86,19 @@ plan = await agent(
     type_name="architect",
 )
 
+tasks = plan.get("tasks") or []
+if not tasks:
+    raise ValueError("Architect returned an empty task list for build_pipeline.py")
+
 log(f"Plan Summary: {plan['summary']}")
-log(f"Tasks decomposed: {len(plan['tasks'])}")
+log(f"Tasks decomposed: {len(tasks)}")
 
 phase("2. Staged TDD Implementation & Review Gates")
 
 completed_tasks = []
+has_blockers = False
 
-for task in plan["tasks"]:
+for task in tasks:
     task_id = task["id"]
     task_title = task["title"]
     log(f"Starting Task {task_id}: {task_title}")
@@ -118,55 +123,71 @@ for task in plan["tasks"]:
     )
     log(f"Task {task_id} implementation status: {impl_report['status']} ({impl_report['test_summary']})")
 
-    for fix_round in range(1, max_fix_rounds + 1):
-        review_specs = [
-            {
-                "type_name": "code-reviewer",
-                "role": f"Code Review: Task {task_id} (R{fix_round})",
-                "prompt": (
-                    f"Audit the implementation of Task {task_id} ({task_title}).\n"
-                    f"Requirements:\n{task['requirements']}\n"
-                    f"Files changed: {', '.join(impl_report['files_changed'])}\n"
-                    f"Check git diff and connected callers. Flag only CRITICAL or IMPORTANT issues in blocking_issues."
+    unresolved_issues = []
+    if impl_report["status"] == "BLOCKED":
+        has_blockers = True
+        unresolved_issues.append(f"Task {task_id} reported BLOCKED: {impl_report['notes']}")
+        log(f"Task {task_id} is BLOCKED; skipping review gates for this task.")
+    else:
+        for fix_round in range(1, max_fix_rounds + 1):
+            review_specs = [
+                {
+                    "type_name": "code-reviewer",
+                    "role": f"Code Review: Task {task_id} (R{fix_round})",
+                    "prompt": (
+                        f"Audit the implementation of Task {task_id} ({task_title}).\n"
+                        f"Requirements:\n{task['requirements']}\n"
+                        f"Files changed: {', '.join(impl_report['files_changed'])}\n"
+                        f"Check git diff and connected callers. Flag only CRITICAL or IMPORTANT issues in blocking_issues."
+                    ),
+                },
+                {
+                    "type_name": "security-auditor",
+                    "role": f"Security Audit: Task {task_id} (R{fix_round})",
+                    "prompt": (
+                        f"Audit the security of Task {task_id} ({task_title}).\n"
+                        f"Files changed: {', '.join(impl_report['files_changed'])}\n"
+                        f"Check trust boundaries, auth, input validation, and secrets. "
+                        f"Put any CRITICAL or HIGH security issues in blocking_issues."
+                    ),
+                },
+            ]
+
+            reviews = await parallel(
+                review_specs,
+                lambda spec: agent(
+                    prompt=spec["prompt"],
+                    schema=REVIEW_SCHEMA,
+                    role=spec["role"],
+                    type_name=spec["type_name"],
                 ),
-            },
-            {
-                "type_name": "security-auditor",
-                "role": f"Security Audit: Task {task_id} (R{fix_round})",
-                "prompt": (
-                    f"Audit the security of Task {task_id} ({task_title}).\n"
-                    f"Files changed: {', '.join(impl_report['files_changed'])}\n"
-                    f"Check trust boundaries, auth, input validation, and secrets. "
-                    f"Put any CRITICAL or HIGH security issues in blocking_issues."
-                ),
-            },
-        ]
+            )
 
-        reviews = await parallel(
-            review_specs,
-            lambda spec: agent(
-                prompt=spec["prompt"],
-                schema=REVIEW_SCHEMA,
-                role=spec["role"],
-                type_name=spec["type_name"],
-            ),
-        )
+            blocking = []
+            for r in reviews:
+                if r["verdict"] == "CHANGES_REQUESTED" and r["blocking_issues"]:
+                    blocking.extend(r["blocking_issues"])
 
-        blocking = []
-        for r in reviews:
-            if r["verdict"] == "CHANGES_REQUESTED" and r["blocking_issues"]:
-                blocking.extend(r["blocking_issues"])
+            if not blocking:
+                log(f"Task {task_id} passed both Code Review and Security Audit.")
+                unresolved_issues = []
+                break
 
-        if not blocking:
-            log(f"Task {task_id} passed both Code Review and Security Audit.")
-            break
+            unresolved_issues = blocking
+            log(f"Task {task_id} review flagged {len(blocking)} blocking issue(s); running fix round {fix_round}...")
+            issues_bullet = "\n".join(f"- {issue}" for issue in blocking)
+            impl_report = await impl_agent(
+                f"Address the following blocking review findings without breaking existing tests:\n{issues_bullet}",
+                IMPL_SCHEMA,
+            )
+            if impl_report["status"] == "BLOCKED":
+                has_blockers = True
+                unresolved_issues.append(f"Task {task_id} became BLOCKED during fix round {fix_round}: {impl_report['notes']}")
+                break
 
-        log(f"Task {task_id} review flagged {len(blocking)} blocking issue(s); running fix round {fix_round}...")
-        issues_bullet = "\n".join(f"- {issue}" for issue in blocking)
-        impl_report = await impl_agent(
-            f"Address the following blocking review findings without breaking existing tests:\n{issues_bullet}",
-            IMPL_SCHEMA,
-        )
+        if unresolved_issues:
+            has_blockers = True
+            log(f"Task {task_id} finished with {len(unresolved_issues)} unresolved blocking issue(s).")
 
     del impl_agent
     completed_tasks.append({
@@ -174,6 +195,7 @@ for task in plan["tasks"]:
         "title": task_title,
         "status": impl_report["status"],
         "files_changed": impl_report["files_changed"],
+        "unresolved_issues": unresolved_issues,
     })
 
 phase("3. Final Workspace Verification")
@@ -194,7 +216,14 @@ log(f"Final Verification Verdict: {final_verification['verdict']}")
 for chk in final_verification.get("checks", []):
     log(f"  {chk}")
 
+overall_status = "PASS"
+if final_verification["verdict"] != "PASS":
+    overall_status = "FAIL"
+elif has_blockers:
+    overall_status = "NEEDS_ATTENTION"
+
 print({
+    "overall_status": overall_status,
     "plan_summary": plan["summary"],
     "completed_tasks": completed_tasks,
     "final_verification": final_verification,

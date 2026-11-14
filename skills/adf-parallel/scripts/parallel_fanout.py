@@ -2,9 +2,12 @@
 # Orchestrates: architect (partitioning) -> parallel(implementer) -> parallel(verifier, code-reviewer)
 
 wf_args = globals().get("args") or {}
-goal = wf_args.get("goal", "").strip()
-workspace_mode = wf_args.get("workspace_mode", "inherit")
+goal = str(wf_args.get("goal") or "").strip()
+workspace_mode = str(wf_args.get("workspace_mode") or "inherit").strip()
 provided_tasks = wf_args.get("tasks") or []
+
+if workspace_mode not in ("inherit", "share", "branch"):
+    raise ValueError(f"Invalid workspace_mode '{workspace_mode}'. Must be 'inherit', 'share', or 'branch'.")
 
 if not goal and not provided_tasks:
     raise ValueError("Provide 'goal' or 'tasks' in Args for parallel_fanout.py")
@@ -72,6 +75,26 @@ else:
     shared_constraints = partition["shared_constraints"]
     slices = partition["slices"]
 
+if not slices:
+    raise ValueError("No parallel work slices to execute.")
+
+# Guard against concurrent file collisions when running in shared workspace ('inherit')
+if workspace_mode == "inherit":
+    seen_files = {}
+    overlapping = set()
+    for s in slices:
+        for f in s.get("files_owned", []):
+            norm_f = f.strip()
+            if norm_f in seen_files:
+                overlapping.add(norm_f)
+            seen_files[norm_f] = s["title"]
+    if overlapping:
+        log(
+            f"Warning: Overlapping files_owned detected ({', '.join(sorted(overlapping))}). "
+            f"Upgrading workspace_mode from 'inherit' to 'share' to prevent write collisions."
+        )
+        workspace_mode = "share"
+
 log(f"Dispatching {len(slices)} parallel implementer slices (workspace={workspace_mode})...")
 
 phase("2. Parallel Slice Implementation")
@@ -94,10 +117,13 @@ slice_results = await parallel(
     ),
 )
 
-all_changed_files = []
+all_changed_files = sorted({
+    f
+    for res in slice_results
+    for f in res.get("files_changed", [])
+})
 for res in slice_results:
     log(f"Slice '{res['title']}' -> {res['status']}: {res['summary']}")
-    all_changed_files.extend(res.get("files_changed", []))
 
 phase("3. Parallel Integration Verification & Review")
 

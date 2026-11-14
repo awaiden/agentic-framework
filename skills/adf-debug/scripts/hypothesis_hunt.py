@@ -80,7 +80,9 @@ initial = await agent(
     type_name="debugger",
 )
 
-hypotheses = initial["hypotheses"]
+hypotheses = initial.get("hypotheses") or []
+if not hypotheses:
+    raise ValueError("Debugger did not return any hypotheses to investigate.")
 log(f"Formulated {len(hypotheses)} hypotheses to test in parallel.")
 
 phase("2. Parallel Hypothesis Investigation")
@@ -114,6 +116,7 @@ for inv in ranked:
 winner = ranked[0] if ranked else None
 fix_result = None
 verification_result = None
+verdict = "INCONCLUSIVE"
 
 if apply_fix and winner and winner["status"] in ("CONFIRMED", "PLAUSIBLE"):
     phase("3. Root-Cause Remediation & Regression Verification")
@@ -133,19 +136,27 @@ if apply_fix and winner and winner["status"] in ("CONFIRMED", "PLAUSIBLE"):
         type_name="implementer",
     )
 
-    verification_result = await agent(
-        prompt=(
-            f"Verify that the bug fix resolves the issue and breaks no existing tests.\n"
-            f"Files changed: {', '.join(fix_result.get('files_changed', []))}\n"
-            f"Reproduction command: {repro_command or '(Auto-detect test suite)'}"
-        ),
-        schema=VERIFY_SCHEMA,
-        role="Verifier: Regression Check",
-        type_name="verifier",
-    )
-    log(f"Post-fix verification verdict: {verification_result['verdict']}")
+    if fix_result["status"] == "BLOCKED":
+        verdict = "BLOCKED"
+        log(f"Fix implementation was BLOCKED: {fix_result['summary']}")
+    else:
+        verification_result = await agent(
+            prompt=(
+                f"Verify that the bug fix resolves the issue and breaks no existing tests.\n"
+                f"Files changed: {', '.join(fix_result.get('files_changed', []))}\n"
+                f"Reproduction command: {repro_command or '(Auto-detect test suite)'}"
+            ),
+            schema=VERIFY_SCHEMA,
+            role="Verifier: Regression Check",
+            type_name="verifier",
+        )
+        verdict = verification_result["verdict"]
+        log(f"Post-fix verification verdict: {verdict}")
+elif winner and winner["status"] in ("CONFIRMED", "PLAUSIBLE"):
+    verdict = "DIAGNOSED_ONLY"
 
 print({
+    "verdict": verdict,
     "observed_behavior": initial["observed_behavior"],
     "ranked_hypotheses": ranked,
     "winning_hypothesis": winner,

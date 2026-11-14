@@ -25,12 +25,16 @@ if not cmd:
 
 RULES = [
     (
-        r"(^|[;&|]\s*)rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive)\s+(/(\s|$)|~(/|\s|$)|\$HOME(/|\s|$)|\.git(\s|/|$))",
+        r"(^|[;&|]\s*)rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive\b.*--force\b|--force\b.*--recursive\b)\s+(/\*?(\s|$)|--no-preserve-root\b|~(/|\s|$)|\"?\$HOME\"?(/|\s|$)|\"?\$\{HOME\}\"?(/|\s|$)|\.git(\s|/|$))",
         "Destructive recursive deletion targeting /, ~, $HOME, or .git detected.",
     ),
     (
-        r"git\s+push\s+.*(--force(?!-with-lease)|-f\b).*\b(main|master)\b",
+        r"git\s+push\s+.*(--force(?!=|-with-lease)|-f\b).*\b(main|master)\b",
         "Force-pushing to main/master branch can overwrite shared history.",
+    ),
+    (
+        r"git\s+push\s+.*(--delete\b.*\b(main|master)\b|:(main|master)\b)",
+        "Deleting remote main/master branch can disrupt shared history.",
     ),
     (
         r"git\s+reset\s+--hard\b",
@@ -47,6 +51,14 @@ RULES = [
     (
         r"(^|[;&|]\s*)(mkfs(\.[a-z0-9]+)?|dd\s+if=.*of=/dev/)",
         "Low-level disk formatting or block device overwrite detected.",
+    ),
+    (
+        r"(^|[;&|]\s*)(chmod|chown)\s+(-[a-zA-Z]*R[a-zA-Z]*|--recursive)\s+.*\s+/(\s|$)",
+        "Recursive permission/ownership change on root (/) detected.",
+    ),
+    (
+        r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b",
+        "Piping remote script directly into a shell detected.",
     ),
 ]
 

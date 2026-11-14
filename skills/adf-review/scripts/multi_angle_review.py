@@ -94,15 +94,28 @@ reports = await parallel(
 phase("2. Aggregating & Ranking Findings")
 
 severity_order = {"CRITICAL": 0, "IMPORTANT": 1, "MINOR": 2}
-all_findings = []
+deduped_map = {}
 
 for rep in reports:
     log(f"[{rep['angle']}] Verdict: {rep['verdict']} — {rep['summary']}")
     for f in rep.get("findings", []):
-        f_with_angle = dict(f)
-        f_with_angle["angle"] = rep["angle"]
-        all_findings.append(f_with_angle)
+        key = (
+            str(f.get("location", "")).strip().lower(),
+            str(f.get("title", "")).strip().lower(),
+        )
+        sev = f.get("severity", "MINOR")
+        if key not in deduped_map:
+            entry = dict(f)
+            entry["angles"] = [rep["angle"]]
+            deduped_map[key] = entry
+        else:
+            existing = deduped_map[key]
+            if rep["angle"] not in existing["angles"]:
+                existing["angles"].append(rep["angle"])
+            if severity_order.get(sev, 3) < severity_order.get(existing.get("severity", "MINOR"), 3):
+                existing["severity"] = sev
 
+all_findings = list(deduped_map.values())
 all_findings.sort(key=lambda item: severity_order.get(item.get("severity", "MINOR"), 3))
 
 overall_verdict = "PASS"

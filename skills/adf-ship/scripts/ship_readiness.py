@@ -1,8 +1,13 @@
 # ADF Pre-Ship Readiness & Verification Gate (run_workflow script)
 # Runs verifier, security-auditor, and code-reviewer in parallel for Go/No-Go release readiness
 
+import re
+
 wf_args = globals().get("args") or {}
-base_ref = wf_args.get("base_ref", "HEAD").strip()
+base_ref = str(wf_args.get("base_ref") or "HEAD").strip()
+
+if not re.match(r"^[a-zA-Z0-9._/~^-]+$", base_ref):
+    raise ValueError(f"Invalid base_ref '{base_ref}' for ship_readiness.py")
 
 GATE_SCHEMA = {
     "type": "object",
@@ -71,7 +76,7 @@ for gr in gate_results:
     log(f"[{gr['gate']}] -> {gr['status']}: {gr['summary']}")
     if gr["status"] == "FAIL" or gr.get("blockers"):
         all_blockers.extend(f"[{gr['gate']}] {b}" for b in gr.get("blockers", []))
-    if gr.get("commit_and_pr_draft"):
+    if gr["gate"] == "Diff Hygiene & Review" and gr.get("commit_and_pr_draft"):
         pr_draft = gr["commit_and_pr_draft"]
 
 decision = "GO" if all(g["status"] == "PASS" for g in gate_results) and not all_blockers else "NO_GO"
